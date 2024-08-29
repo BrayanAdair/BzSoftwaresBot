@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const { gpt } = require("gpti");
 const config = require('./config.json');
 
@@ -14,6 +14,16 @@ const client = new Client({
     GatewayIntentBits.MessageContent
   ]
 });
+
+// Colección para almacenar los comandos
+client.commands = new Collection();
+const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
+
+// Cargar cada comando y añadirlo a la colección de comandos
+for (const file of commandFiles) {
+  const command = require(`./commands/${file}`);
+  client.commands.set(command.data.name, command);
+}
 
 // Almacena los IDs de los canales donde el bot no debe responder
 const ignoredChannels = new Set();
@@ -36,9 +46,29 @@ client.on('ready', () => {
   console.log(`Se ha inicializado el bot: ${client.user.tag}`);
 });
 
+// Maneja las interacciones de comandos
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+
+  const command = client.commands.get(interaction.commandName);
+
+  if (!command) return;
+
+  try {
+    await command.execute(interaction);
+  } catch (error) {
+    console.error('Error al ejecutar el comando:', error);
+    await interaction.reply({ content: 'Hubo un error al ejecutar ese comando.', ephemeral: true });
+  }
+});
+
+// Maneja los mensajes de texto (no comandos)
 client.on('messageCreate', async (message) => {
     // Ignora los mensajes de cualquier bot (incluido el propio bot)
     if (message.author.bot) return;
+
+    // Aquí nos aseguramos de que la IA no responda a comandos de barra "/"
+    if (message.content.startsWith('/')) return;
 
     const content = message.content;
     const channel = message.channel;
@@ -59,22 +89,27 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    history.push({ role: 'user', content });
+    // Si no es un comando, pasar el mensaje a la IA
+    try {
+        history.push({ role: 'user', content });
 
-    gpt.v1({
-        messages: history,
-        prompt: content,
-        model: 'GPT-4',
-        markdown: false
-    }, async (err, data) => {
-        if (err) {
-            console.log("Error en la llamada a GPT: ", err);
-        } else if (data && data.gpt) {
-            const response = data.gpt;
-            history.push({ role: 'assistant', content: response });
-            await channel.send(response);
-        } else {
-            console.log("Respuesta inesperada de GPT: ", data);
-        }
-    });
+        gpt.v1({
+            messages: history,
+            prompt: content,
+            model: 'GPT-4',
+            markdown: false
+        }, async (err, data) => {
+            if (err) {
+                console.log("Error en la llamada a GPT: ", err);
+            } else if (data && data.gpt) {
+                const response = data.gpt;
+                history.push({ role: 'assistant', content: response });
+                await channel.send(response);
+            } else {
+                console.log("Respuesta inesperada de GPT: ", data);
+            }
+        });
+    } catch (error) {
+        console.error('Error al procesar la respuesta de la IA:', error);
+    }
 });
